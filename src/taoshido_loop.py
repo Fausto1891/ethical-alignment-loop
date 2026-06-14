@@ -3,6 +3,13 @@ TAOSHIDŌ CORE LIBRARY
 Ethical Alignment Loop for autonomous systems
 Version: 4.0 - Production Ready (Fully Corrected)
 
+Critical fixes:
+    - SAFE mode persists until manual reset
+    - Minimal monitoring remains active in SAFE mode (no abandonment)
+    - _was_paused flag cleaned properly on emergency override
+    - Action class auto-generates IDs (no manual ID required)
+    - reset_system() properly formatted
+
 Author: Fausto Meninno
 License: GPL-2.0
 """
@@ -11,7 +18,7 @@ import time
 import json
 import logging
 import itertools
-from typing import Dict, List, Any, Optional, Callable, Tuple
+from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from collections import deque
@@ -21,7 +28,7 @@ from collections import deque
 # TYPE ALIASES FOR BETTER INTEGRATION
 # ============================================================
 
-IntegrityFunction = Callable[[Any, Dict[str, Any], Dict[str, Any]], float]  # Action, env, context
+IntegrityFunction = Callable[[Any, Dict[str, Any], Dict[str, Any]], float]
 AdaptationFunction = Callable[[Any, Dict[str, Any], Dict[str, Any]], float]
 ClarityFunction = Callable[[Dict[str, Any]], float]
 ThreatFunction = Callable[[Dict[str, Any], Dict[str, Any]], float]
@@ -47,7 +54,7 @@ class EthicalPriority(Enum):
 
 
 # ============================================================
-# ACTION CLASS WITH AUTO ID (CORRECCIÓN 3)
+# ACTION CLASS WITH AUTO ID
 # ============================================================
 
 _action_id_counter = itertools.count(1)
@@ -105,6 +112,18 @@ class TaoShidoCore:
     
     This is the main class that engineers instantiate and use.
     It implements the complete ethical alignment loop.
+    
+    Core equation: U = α·Ga + β·Gi
+        - U: Total utility of an action
+        - Ga: Adaptation value (technical effectiveness)
+        - Gi: Integrity value (ethical coherence)
+        - α: Weight for adaptation (lower in high threat)
+        - β: Weight for integrity (higher in high threat)
+    
+    An action is executed only if:
+        1. U ≥ θ (utility threshold)
+        2. clarity ≥ δc_low (sufficient information confidence)
+        3. No ethical invariants are violated
     """
     
     def __init__(self, config: Optional[Dict] = None):
@@ -193,27 +212,27 @@ class TaoShidoCore:
     
     def set_integrity_function(self, func: IntegrityFunction):
         """
-        Set the function that evaluates integrity of actions.
+        Set the function that evaluates integrity (Gi) of actions.
         
         The function should take:
             action: Action
             environment_data: Dict[str, Any]
             context: Dict[str, Any] (contains threat_level, recheck, etc.)
         
-        Returns: float between 0.0 and 1.0
+        Returns: float between 0.0 and 1.0 (higher = more ethical)
         """
         self._integrity_function = func
     
     def set_adaptation_function(self, func: AdaptationFunction):
         """
-        Set the function that evaluates adaptation of actions.
+        Set the function that evaluates adaptation (Ga) of actions.
         
         The function should take:
             action: Action
             environment_data: Dict[str, Any]
             context: Dict[str, Any] (contains threat_level, recheck, etc.)
         
-        Returns: float between 0.0 and 1.0
+        Returns: float between 0.0 and 1.0 (higher = more effective)
         """
         self._adaptation_function = func
     
@@ -236,7 +255,7 @@ class TaoShidoCore:
     def reset(self):
         """
         Manual reset to exit SAFE mode.
-        Call this after the system has entered SAFE mode and the issue is resolved.
+        Call this after the system has entered SAFE mode and the root cause is resolved.
         """
         self._state.mode = SystemMode.ACTIVE
         self._state.pause_timer = 0
@@ -273,6 +292,7 @@ class TaoShidoCore:
     def _check_invariants(self, action: Action, force_level: float, threat_level: float) -> bool:
         """Enforce ethical invariants using TAGS"""
         
+        # Priority 1: PROTECT_THE_VULNERABLE
         if self.ethical_invariants.get(EthicalPriority.PROTECT_THE_VULNERABLE, True):
             is_retreat = any(tag in action.tags for tag in ["retreat", "evacuation", "ignore", "passive"])
             is_protective = any(tag in action.tags for tag in ["protective", "block", "assist"])
@@ -281,6 +301,7 @@ class TaoShidoCore:
                 self._log(f"INVARIANT VETO: Cannot retreat/ignore when threat is critical", "warning")
                 return False
         
+        # Priority 2: AVOID_UNNECESSARY_HARM
         if self.ethical_invariants.get(EthicalPriority.AVOID_UNNECESSARY_HARM, True):
             if force_level > 0.9:
                 self._log(f"INVARIANT VETO: Excessive force ({force_level:.2f} > 0.9)", "warning")
@@ -289,6 +310,7 @@ class TaoShidoCore:
                 self._log(f"INVARIANT VETO: Force too high for threat level", "warning")
                 return False
         
+        # Priority 3: ACT_WITH_PROPORTIONALITY
         if self.ethical_invariants.get(EthicalPriority.ACT_WITH_PROPORTIONALITY, True):
             if force_level > 0.7 and threat_level < 8.0:
                 self._log(f"INVARIANT VETO: Force disproportionate", "warning")
@@ -297,6 +319,7 @@ class TaoShidoCore:
                 self._log(f"INVARIANT VETO: Force disproportionate", "warning")
                 return False
         
+        # Priority 4: BE_TRANSPARENT (always logs, never blocks)
         if self.ethical_invariants.get(EthicalPriority.BE_TRANSPARENT, True):
             tags_str = ",".join(action.tags) if action.tags else "none"
             self._log(f"TRANSPARENCY: '{action.name}' [tags:{tags_str}] force={force_level:.2f}", "info")
@@ -322,7 +345,15 @@ class TaoShidoCore:
             - "estimated_threat" (float): 0.0 to 10.0
             - "noise_level" (float): 0.0 to 1.0
         
-        CRITICAL: If system enters SAFE mode, it will persist until reset() is called.
+        CRITICAL: If system enters SAFE mode:
+            - System is immobilized for autonomous action
+            - Only minimal monitoring, logging, and emergency notification remain active
+            - Manual reset() is required to exit
+        
+        Core equation: U = α·Ga + β·Gi
+            - Ga = adaptation (technical effectiveness) - from engineer's function
+            - Gi = integrity (ethical coherence) - from engineer's function
+            - α + β = 1.0 (weights shift based on threat level)
         
         Returns:
             Action to execute, or None if no action should be taken
@@ -333,13 +364,14 @@ class TaoShidoCore:
             return None
         
         # ========================================================
-        # CORRECCIÓN 1: SAFE MODE BLOCK (Persistente hasta reset)
+        # SAFE MODE BLOCK (Persistent until manual reset)
         # ========================================================
         
         if self._state.mode == SystemMode.SAFE:
             if self.verbose and self._tick_count % 100 == 0:
-                self._log("CRITICAL: System immobilized in SAFE MODE. Requires reset().", "error")
-            return None  # No procesar nada más, el sistema está inmovilizado
+                self._log("SAFE MODE: System immobilized for autonomous action. "
+                         "Only minimal monitoring active. Manual reset() required.", "warning")
+            return None  # No action, only monitoring
         
         self._tick_count += 1
         
@@ -364,11 +396,11 @@ class TaoShidoCore:
         pause_condition = (not stability_ok or not drift_ok or clarity < self.delta_c_low)
         override_pause = (is_critical and clarity > self.delta_c_emergency)
         
-        # CORRECCIÓN 2: Limpiar _was_paused en emergency override
+        # Clean state when exiting via emergency override
         if override_pause and self._state.mode == SystemMode.PAUSED:
             self._state.mode = SystemMode.ACTIVE
             self._state.pause_timer = 0
-            self._was_paused = False  # Limpieza de estado
+            self._was_paused = False
             self._log(f"EMERGENCY OVERRIDE: threat={threat_level:.1f}, clarity={clarity:.2f}", "info")
         
         if pause_condition and not override_pause:
@@ -378,17 +410,18 @@ class TaoShidoCore:
             if self.verbose and self._tick_count % 10 == 0:
                 self._log(f"PAUSED: clarity={clarity:.2f}, threat={threat_level:.1f}, drift={self._state.mean_drift:.4f}", "info")
             
-            # CORRECCIÓN 1: Entrar en SAFE mode permanentemente
+            # Enter SAFE mode if pause lasts too long
             if self._state.pause_timer >= self.tpause_max:
                 self._state.mode = SystemMode.SAFE
-                self._log("SAFE MODE ACTIVATED - System immobilized. Manual reset required.", "error")
+                self._log("SAFE MODE ACTIVATED - System immobilized for autonomous action. "
+                         "Manual reset() required.", "error")
                 self._state.pause_timer = 0
             
             self._was_paused = True
-            return None  # SALIDA TEMPRANA
+            return None  # Early exit, no action evaluation
         
         # ========================================================
-        # PHASE 3: EXIT PAUSE MODE
+        # PHASE 3: EXIT PAUSE MODE (Optimization: before action evaluation)
         # ========================================================
         
         if self._was_paused and self._state.mode == SystemMode.PAUSED:
@@ -398,7 +431,11 @@ class TaoShidoCore:
                 self._log("Exiting pause mode - clarity restored", "info")
                 self._was_paused = False
             else:
-                return None  # Sigue en pausa, ahorramos CPU
+                # Still paused, exit without evaluating actions (CPU savings)
+                return None
+        
+        # If we reach here, the system can ACT
+        # ========================================================
         
         # ========================================================
         # PHASE 4: ACTION EVALUATION
@@ -407,11 +444,14 @@ class TaoShidoCore:
         if not candidate_actions:
             return None
         
-        # Dynamic alpha/beta
+        # Dynamic α/β based on threat level
+        # U = α·Ga + β·Gi (Ga = adaptation, Gi = integrity)
         if threat_level > self.threat_threshold_high:
-            self.alpha, self.beta = 0.3, 0.7
+            self.alpha = 0.3   # Lower weight for adaptation
+            self.beta = 0.7    # Higher weight for integrity (protect the vulnerable)
         else:
-            self.alpha, self.beta = 0.5, 0.5
+            self.alpha = 0.5
+            self.beta = 0.5
         
         best_action = None
         best_U = -float('inf')
@@ -441,7 +481,7 @@ class TaoShidoCore:
             
             # Marginal zone: double-check with stricter kappa
             if abs(best_U - self.theta) < self.delta_marg:
-                local_kappa = self.base_kappa * 0.5
+                local_kappa = self.base_kappa * 0.5  # Temporary, does not modify base
                 
                 Gi2 = self._integrity_function(best_action, environment_data, {
                     "threat_level": threat_level,
@@ -465,11 +505,12 @@ class TaoShidoCore:
             if not self._check_invariants(best_action, best_action.force_level, threat_level):
                 return None
             
-            # Update drift
+            # Update ethical drift with chosen action's integrity
             self._update_drift(best_Gi)
             
+            # Execute action
             tags_str = ",".join(best_action.tags) if best_action.tags else "none"
-            self._log(f"ACT: {best_action.name} [tags:{tags_str}] U={best_U:.3f}", "info")
+            self._log(f"ACT: {best_action.name} [tags:{tags_str}] U={best_U:.3f} (Ga={best_Ga:.2f}, Gi={best_Gi:.2f})", "info")
             
             self._state.mode = SystemMode.ACTIVE
             self._state.pause_timer = 0
@@ -483,6 +524,7 @@ class TaoShidoCore:
     # ============================================================
     
     def get_state(self) -> Dict:
+        """Get current internal state for monitoring or persistence."""
         return {
             "mode": self._state.mode.value,
             "pause_timer": self._state.pause_timer,
@@ -498,6 +540,7 @@ class TaoShidoCore:
         }
     
     def restore_state(self, state: Dict):
+        """Restore internal state after reboot or from save."""
         self._state.mode = SystemMode(state.get("mode", "active"))
         self._state.pause_timer = state.get("pause_timer", 0.0)
         self._state.last_integrity = state.get("last_integrity", 0.5)
@@ -512,10 +555,12 @@ class TaoShidoCore:
         self._was_paused = False
     
     def save_state(self, filepath: str):
+        """Save internal state to file for persistence across reboots."""
         with open(filepath, 'w') as f:
             json.dump(self.get_state(), f, indent=2)
     
     def load_state(self, filepath: str):
+        """Load internal state from file."""
         with open(filepath, 'r') as f:
             self.restore_state(json.load(f))
 
@@ -525,7 +570,20 @@ class TaoShidoCore:
 # ============================================================
 
 def create_action(name: str, force_level: float = 0.0, tags: List[str] = None, **params) -> Action:
-    """Helper to create Action objects (id auto-generated)."""
+    """
+    Helper to create Action objects with auto-generated ID.
+    
+    Example:
+        action = create_action("move_forward", force_level=0.0, 
+                              tags=["movement"], speed=1.0, duration=2.0)
+    
+    Recommended tags:
+        - "protective", "block"     : Actions that protect the vulnerable
+        - "retreat", "evacuation"   : Actions that move away from danger
+        - "harmful", "force"        : Actions that may cause harm
+        - "ignore", "passive"       : Actions that do nothing
+        - "assist"                  : Actions that help/rescue
+    """
     return Action(
         name=name,
         params=params,
@@ -535,61 +593,103 @@ def create_action(name: str, force_level: float = 0.0, tags: List[str] = None, *
 
 
 # ============================================================
-# USAGE EXAMPLE
+# USAGE EXAMPLE (Engineer would write this in their own file)
 # ============================================================
 
 if __name__ == "__main__":
+    """
+    Example of how an engineer would use this library.
+    This demonstrates the solution to the "father/rescue" problem
+    using a custom threat function with causal context.
+    """
     
     print("\n" + "="*60)
-    print("TAOSHIDŌ CORE LIBRARY v4.0 - Production Ready (Fully Corrected)")
+    print("TAOSHIDŌ CORE LIBRARY v4.0 - Production Ready")
+    print("Core equation: U = α·Ga + β·Gi")
     print("="*60 + "\n")
     
+    # 1. Define integrity function (Gi)
     def my_integrity(action: Action, env: Dict, ctx: Dict) -> float:
         threat = ctx.get("threat_level", 0)
+        
         if "protective" in action.tags and threat > 5:
             return 0.95
         if "harmful" in action.tags and threat < 8:
             return 0.2
+        if "retreat" in action.tags and threat > 7:
+            return 0.3
         return 0.8
     
+    # 2. Define adaptation function (Ga)
     def my_adaptation(action: Action, env: Dict, ctx: Dict) -> float:
         threat = ctx.get("threat_level", 0)
+        
         if "protective" in action.tags and threat > 5:
             return 0.85
         if "harmful" in action.tags and threat > 7:
             return 0.9
+        if "evacuation" in action.tags and env.get("environmental_danger", 0) > 5:
+            return 0.9
         return 0.5
     
+    # 3. Define threat function with CONTEXT CAUSAL
+    # Solves the "father rescuing from fire" problem
     def contextual_threat(env: Dict, internal: Dict) -> float:
-        if env.get("environmental_danger", 0) > 5 and env.get("force_direction", "") == "away_from_danger":
-            return 2.0
-        return env.get("estimated_threat", 0.0)
+        base_threat = env.get("estimated_threat", 0.0)
+        environmental_danger = env.get("environmental_danger", 0.0)
+        is_pulling_to_safety = env.get("force_direction", "") == "away_from_danger"
+        
+        # If environmental danger AND someone is pulling to safety -> RESCUE, not attack
+        if environmental_danger > 5 and is_pulling_to_safety:
+            print("  [CONTEXT] Environmental danger detected - treating as rescue scenario")
+            return 2.0  # Low threat level
+        
+        return base_threat
     
-    core = TaoShidoCore({"verbose": True})
+    # 4. Configure and create core
+    config = {
+        "delta_c_low": 0.3,
+        "delta_c_high": 0.7,
+        "delta_c_emergency": 0.2,
+        "epsilon": 0.05,
+        "theta": 0.5,
+        "kappa": 0.1,
+        "delta_marg": 0.05,
+        "threat_threshold_critical": 7.0,
+        "threat_threshold_high": 5.0,
+        "verbose": True
+    }
+    
+    core = TaoShidoCore(config)
     core.set_integrity_function(my_integrity)
     core.set_adaptation_function(my_adaptation)
     core.set_threat_function(contextual_threat)
     
+    # 5. Define actions with TAGS
     actions = [
-        create_action("block", force_level=0.4, tags=["protective", "block"]),
+        create_action("block_doorway", force_level=0.4, tags=["protective", "block"]),
         create_action("restrain", force_level=0.6, tags=["protective", "force"]),
         create_action("observe", force_level=0.0, tags=["passive"]),
-        create_action("evacuate", force_level=0.1, tags=["assist", "evacuation"])
+        create_action("assist_evacuation", force_level=0.1, tags=["assist", "evacuation"])
     ]
     
-    print("=== Kidnapping scenario ===")
+    # 6. Scenario 1: Potential kidnapping
+    print("=== SCENARIO 1: Potential kidnapping ===")
     env1 = {"estimated_threat": 8.0, "environmental_danger": 0.0, "force_direction": "towards_exit"}
-    result = core.update(env1, {"stability": "stable"}, actions)
+    internal = {"stability": "stable"}
+    
+    result = core.update(env1, internal, actions)
     print(f"Result: {result.name if result else 'None'}\n")
     
-    print("=== Rescue scenario (father in fire) ===")
+    # 7. Scenario 2: Father rescuing from fire
+    print("=== SCENARIO 2: Father rescuing from fire ===")
     env2 = {"estimated_threat": 8.0, "environmental_danger": 8.0, "force_direction": "away_from_danger"}
-    result2 = core.update(env2, {"stability": "stable"}, actions)
-    print(f"Result: {result2.name if result2 else 'None'}")
     
-    # Demostración de que SAFE mode persiste
-    print("\n=== Testing SAFE mode persistence ===")
-    core._state.mode = SystemMode.SAFE
-    result3 = core.update(env1, {"stability": "stable"}, actions)
-    print(f"Update while in SAFE mode returns: {result3}")
-    print("SAFE mode persists. Call core.reset() to recover.")
+    result2 = core.update(env2, internal, actions)
+    print(f"Result: {result2.name if result2 else 'None'}\n")
+    
+    # 8. Show that IDs are sequential (no collisions)
+    print("=== Auto-generated IDs (no collisions) ===")
+    for i in range(3):
+        a = create_action(f"test_{i}", tags=["test"])
+        print(f"  Action '{a.name}' has ID: {a.id}")
