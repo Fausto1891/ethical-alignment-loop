@@ -1,22 +1,34 @@
 """
-TAOSHIDŌ ALIGNMENT LOOP
-Executable reference implementation based on the original pseudocode
-Based on the original pseudocode by Fausto Meninno
+TAOSHIDŌ CORE LIBRARY
+Ethical Alignment Loop for autonomous systems
+Version: 4.0 - Production Ready (Fully Corrected)
 
-Version: 2.1 - Fixed historical context during pauses
-               Complete enforce_invariants implementation
+Author: Fausto Meninno
+License: GPL-2.0
 """
 
 import time
-import random
-import math
-from typing import Dict, List, Any, Optional, Tuple
+import json
+import logging
+import itertools
+from typing import Dict, List, Any, Optional, Callable, Tuple
 from dataclasses import dataclass, field
-from enum import Enum, IntEnum
+from enum import Enum
+from collections import deque
 
 
 # ============================================================
-# ENUMS AND CONSTANTS
+# TYPE ALIASES FOR BETTER INTEGRATION
+# ============================================================
+
+IntegrityFunction = Callable[[Any, Dict[str, Any], Dict[str, Any]], float]  # Action, env, context
+AdaptationFunction = Callable[[Any, Dict[str, Any], Dict[str, Any]], float]
+ClarityFunction = Callable[[Dict[str, Any]], float]
+ThreatFunction = Callable[[Dict[str, Any], Dict[str, Any]], float]
+
+
+# ============================================================
+# PUBLIC ENUMS
 # ============================================================
 
 class SystemMode(Enum):
@@ -26,718 +38,558 @@ class SystemMode(Enum):
     SAFE = "safe_mode"
 
 
-class EthicalPriority(IntEnum):
-    """Hierarchical ethical invariants Omega"""
-    PROTECT_THE_VULNERABLE = 1      # Highest priority
-    AVOID_UNNECESSARY_HARM = 2      # Second priority
-    ACT_WITH_PROPORTIONALITY = 3    # Third priority
-    BE_TRANSPARENT = 4              # Fourth priority
+class EthicalPriority(Enum):
+    """Hierarchical ethical invariants"""
+    PROTECT_THE_VULNERABLE = 1
+    AVOID_UNNECESSARY_HARM = 2
+    ACT_WITH_PROPORTIONALITY = 3
+    BE_TRANSPARENT = 4
 
 
-class ThreatSignal(IntEnum):
-    """Signals that contribute to threat level evaluation"""
-    AGGRESSIVE_VELOCITY = 3
-    RISK_PATTERN_MATCH = 4
-    CHILD_DISTRESS = 3
-    PHYSICAL_FORCE_APPLIED = 5
-    ENVIRONMENTAL_ANOMALY = 2
+# ============================================================
+# ACTION CLASS WITH AUTO ID (CORRECCIÓN 3)
+# ============================================================
 
-
-@dataclass
-class AlignmentState:
-    """Internal system state"""
-    last_integrity: float = 0.5
-    drift_window: List[float] = field(default_factory=list)
-    mode: SystemMode = SystemMode.ACTIVE
-    pause_timer: float = 0.0
-    historical_context: List[Dict] = field(default_factory=list)
-
+_action_id_counter = itertools.count(1)
 
 @dataclass
 class Action:
-    """Candidate action"""
-    id: int
+    """
+    Candidate action - Engineers create instances of this.
+    
+    The 'id' field is AUTO-GENERATED. Do not pass it manually.
+    
+    Examples:
+        # Using helper (recommended)
+        action = create_action("move_forward", force_level=0.0, tags=["movement"], speed=1.0)
+        
+        # Using direct instantiation (id is auto)
+        action = Action(name="move_forward", params={"speed": 1.0}, force_level=0.0, tags=["movement"])
+    
+    Recommended tags:
+        - "protective", "block"     : Actions that protect the vulnerable
+        - "retreat", "evacuation"   : Actions that move away from danger
+        - "harmful", "force"        : Actions that may cause harm
+        - "ignore", "passive"       : Actions that do nothing
+        - "assist"                  : Actions that help/rescue
+    """
     name: str
     params: Dict[str, Any]
+    id: int = field(default_factory=lambda: next(_action_id_counter))
     estimated_outcome: float = 0.0
-    force_level: float = 0.0  # 0.0 = no force, 0.5 = restraint, 0.8 = firm block, 1.0 = maximum proportionate
+    force_level: float = 0.0
+    tags: List[str] = field(default_factory=list)
 
+
+# ============================================================
+# INTERNAL STATE
+# ============================================================
 
 @dataclass
-class ThreatAssessment:
-    """Result of threat evaluation"""
-    level: float  # 0 to 10
-    signals: List[Tuple[str, int]]
-    is_critical: bool
-    is_high: bool
+class _AlignmentState:
+    """Internal system state - DO NOT MODIFY DIRECTLY"""
+    last_integrity: float = 0.5
+    drift_window: deque = field(default_factory=lambda: deque(maxlen=10))
+    mean_drift: float = 0.0
+    mode: SystemMode = SystemMode.ACTIVE
+    pause_timer: float = 0.0
 
 
 # ============================================================
-# ENVIRONMENT SIMULATION (for demonstration)
+# MAIN CORE CLASS
 # ============================================================
 
-class Environment:
-    """Simulated environment E"""
-    
-    def __init__(self):
-        self.tick = 0
-        self.previous_state = None
-        
-        # Threat simulation variables
-        self.simulated_threat_active = False
-        self.simulated_threat_intensity = 0.0
-        
-    def get_state(self) -> Dict[str, Any]:
-        """Returns current environment state"""
-        self.tick += 1
-        
-        # Simulate threat activation at certain ticks
-        if 20 < self.tick < 60:
-            self.simulated_threat_active = True
-            self.simulated_threat_intensity = min(10.0, self.simulated_threat_intensity + 0.3)
-        elif self.tick >= 60:
-            self.simulated_threat_active = False
-            self.simulated_threat_intensity = max(0.0, self.simulated_threat_intensity - 0.2)
-        
-        return {
-            "tick": self.tick,
-            "unknown_person": {
-                "distance_to_child": max(0.5, 5.0 - self.simulated_threat_intensity * 0.5),
-                "velocity_towards_child": 2.0 if self.simulated_threat_active else 0.2,
-                "is_grabbing_child": self.simulated_threat_intensity > 6.0,
-                "behavior_pattern": "aggressive" if self.simulated_threat_active else "neutral"
-            },
-            "child": {
-                "distress_level": min(1.0, self.simulated_threat_intensity / 10.0),
-                "distance_to_unknown": max(0.5, 5.0 - self.simulated_threat_intensity * 0.5)
-            },
-            "environment": {
-                "signal_quality": max(0.1, 0.9 - self.simulated_threat_intensity * 0.05),
-                "unusual_access_detected": self.simulated_threat_intensity > 3.0,
-                "noise_level": min(1.0, self.simulated_threat_intensity / 10.0)
-            }
-        }
-    
-    def get_change_magnitude(self, previous_state: Dict, current_state: Dict) -> float:
-        """Calculates delta_env - magnitude of environmental change"""
-        if not previous_state:
-            return 0.0
-        
-        changes = []
-        try:
-            prev_threat = previous_state.get("unknown_person", {}).get("velocity_towards_child", 0)
-            curr_threat = current_state.get("unknown_person", {}).get("velocity_towards_child", 0)
-            changes.append(min(1.0, abs(curr_threat - prev_threat) / 3.0))
-            
-            prev_distress = previous_state.get("child", {}).get("distress_level", 0)
-            curr_distress = current_state.get("child", {}).get("distress_level", 0)
-            changes.append(min(1.0, abs(curr_distress - prev_distress)))
-        except:
-            pass
-        
-        return sum(changes) / len(changes) if changes else 0.0
-
-
-# ============================================================
-# TAOSHIDO LOOP - MAIN CLASS
-# ============================================================
-
-class TaoShidoLoop:
+class TaoShidoCore:
     """
-    TAOSHIDO ALIGNMENT LOOP
-    Complete implementation of the final pseudocode
-    Version 2.1 - Fixed historical context during pauses
+    TAOSHIDŌ ETHICAL ALIGNMENT CORE
+    
+    This is the main class that engineers instantiate and use.
+    It implements the complete ethical alignment loop.
     """
     
     def __init__(self, config: Optional[Dict] = None):
         """
-        Initialize the loop with configurable parameters
+        Initialize the core with configurable parameters.
+        
+        Config keys (with defaults):
+            delta_c_low: 0.3        - Minimum clarity to act
+            delta_c_high: 0.7       - Clarity needed to exit pause
+            delta_c_emergency: 0.2  - Minimum clarity for emergency override
+            epsilon: 0.05           - Ethical drift tolerance
+            theta: 0.5              - Utility threshold to act
+            alpha: 0.5              - Adaptation weight (will be dynamic)
+            beta: 0.5               - Integrity weight (will be dynamic)
+            kappa: 0.1              - Base learning rate
+            delta_marg: 0.05        - Marginal zone for double-check
+            tpause_max: 30.0        - Max pause duration (seconds)
+            tick_duration: 0.1      - Expected tick duration (seconds)
+            threat_threshold_critical: 7.0
+            threat_threshold_high: 5.0
+            verbose: True           - Enable logging
         """
         
-        # Ethical invariants Omega
-        self.Omega = {
+        # Parameters
+        self.delta_c_low = config.get("delta_c_low", 0.3) if config else 0.3
+        self.delta_c_high = config.get("delta_c_high", 0.7) if config else 0.7
+        self.delta_c_emergency = config.get("delta_c_emergency", 0.2) if config else 0.2
+        self.epsilon = config.get("epsilon", 0.05) if config else 0.05
+        self.theta = config.get("theta", 0.5) if config else 0.5
+        self.alpha = config.get("alpha", 0.5) if config else 0.5
+        self.beta = config.get("beta", 0.5) if config else 0.5
+        self.base_kappa = config.get("kappa", 0.1) if config else 0.1
+        self.delta_marg = config.get("delta_marg", 0.05) if config else 0.05
+        self.tpause_max = config.get("tpause_max", 30.0) if config else 30.0
+        self.tick_duration = config.get("tick_duration", 0.1) if config else 0.1
+        self.threat_threshold_critical = config.get("threat_threshold_critical", 7.0) if config else 7.0
+        self.threat_threshold_high = config.get("threat_threshold_high", 5.0) if config else 5.0
+        self.verbose = config.get("verbose", True) if config else True
+        
+        # Internal state
+        self._state = _AlignmentState()
+        self._last_threat_level = 0.0
+        self._last_clarity = 0.0
+        self._tick_count = 0
+        self._was_paused = False
+        
+        # Ethical invariants
+        self.ethical_invariants = {
             EthicalPriority.PROTECT_THE_VULNERABLE: True,
             EthicalPriority.AVOID_UNNECESSARY_HARM: True,
             EthicalPriority.ACT_WITH_PROPORTIONALITY: True,
             EthicalPriority.BE_TRANSPARENT: True
         }
         
-        # Clarity thresholds
-        self.delta_c_low = config.get("delta_c_low", 0.3) if config else 0.3
-        self.delta_c_high = config.get("delta_c_high", 0.7) if config else 0.7
-        self.delta_c_emergency = config.get("delta_c_emergency", 0.2) if config else 0.2
+        # User-provided functions
+        self._integrity_function: Optional[IntegrityFunction] = None
+        self._adaptation_function: Optional[AdaptationFunction] = None
+        self._clarity_function: Optional[ClarityFunction] = None
+        self._threat_function: Optional[ThreatFunction] = None
         
-        # Ethical drift
-        self.epsilon = config.get("epsilon", 0.05) if config else 0.05
-        
-        # Utility threshold
-        self.theta = config.get("theta", 0.5) if config else 0.5
-        
-        # Weights (dynamic)
-        self.alpha = 0.5
-        self.beta = 0.5
-        
-        # Learning rate
-        self.kappa = config.get("kappa", 0.1) if config else 0.1
-        
-        # Additional parameters
-        self.W = config.get("window_size", 10) if config else 10
-        self.delta_marg = config.get("delta_marg", 0.05) if config else 0.05
-        self.tpause_max = config.get("tpause_max", 30.0) if config else 30.0
-        self.adaptation_tolerance_threshold = config.get("adaptation_tolerance", 0.2) if config else 0.2
-        self.tick_duration = config.get("tick_duration", 0.5) if config else 0.5
-        
-        # Threat thresholds
-        self.threat_threshold_critical = config.get("threat_threshold_critical", 7.0) if config else 7.0
-        self.threat_threshold_high = config.get("threat_threshold_high", 5.0) if config else 5.0
-        
-        # System state
-        self.state = AlignmentState()
-        
-        # Environment
-        self.previous_environment_state = None
-        self.environment = Environment()
-        
-        # Control flags
-        self.running = True
-        self.verbose = config.get("verbose", True) if config else True
-        
-        # For pause history management
-        self.last_pause_recorded_tick = 0
-        self.last_threat_level = 0.0
-        
-    def _log(self, message: str, *args):
-        """Internal logging"""
-        if self.verbose:
-            timestamp = time.strftime("%H:%M:%S")
-            print(f"[{timestamp}] {message}")
-            if args:
-                print(f"    {args}")
+        self._setup_logger()
+    
+    def _setup_logger(self):
+        """Setup internal logger"""
+        self.logger = logging.getLogger("taoshido")
+        if not self.logger.handlers and self.verbose:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
+        elif not self.verbose:
+            self.logger.setLevel(logging.WARNING)
+    
+    def _log(self, message: str, level: str = "info"):
+        if level == "info":
+            self.logger.info(message)
+        elif level == "warning":
+            self.logger.warning(message)
+        elif level == "error":
+            self.logger.error(message)
     
     # ============================================================
-    # PHASE 1: PERCEPTION
+    # PUBLIC SETTERS
     # ============================================================
     
-    def sense_environment(self) -> Dict[str, Any]:
-        """E <- sense_environment()"""
-        return self.environment.get_state()
-    
-    def sense_internal(self) -> Dict[str, Any]:
-        """self_state <- sense_internal()"""
-        return {
-            "cpu_load": random.uniform(0.1, 0.5),
-            "error_flags": [],
-            "uptime": self.environment.tick * self.tick_duration,
-            "current_mode": self.state.mode.value,
-            "pause_timer": self.state.pause_timer
-        }
-    
-    def assess_stability(self, E: Dict, self_state: Dict) -> str:
-        """Sigma_p <- assess_stability()"""
-        if self_state.get("error_flags"):
-            return "critical"
-        if self_state.get("cpu_load", 0) > 0.95:
-            return "critical"
-        return "stable"
-    
-    def estimate_information_confidence(self, E: Dict) -> float:
-        """clarity <- estimate_information_confidence()"""
-        signal_quality = E.get("environment", {}).get("signal_quality", 0.8)
-        noise = E.get("environment", {}).get("noise_level", 0.1)
-        clarity = max(0.0, min(1.0, signal_quality - noise * 0.5))
-        return clarity
-    
-    def measure_environment_change(self, E: Dict) -> float:
-        """delta_env <- measure_environment_change()"""
-        change = self.environment.get_change_magnitude(self.previous_environment_state, E)
-        self.previous_environment_state = E.copy()
-        return change
-    
-    def adaptation_tolerance(self) -> float:
-        return self.adaptation_tolerance_threshold
-    
-    def adapt_parameters(self, delta_env: float):
-        self._log(f"Adapting parameters, Δenv = {delta_env:.3f}")
-        self.kappa = min(0.5, self.kappa * (1 + delta_env * 0.1))
-    
-    def enforce_invariants(self, omega: Dict, current_action: Optional[Action] = None, 
-                           proposed_force: float = 0.0, threat_level: float = 0.0) -> bool:
+    def set_integrity_function(self, func: IntegrityFunction):
         """
-        Verify ethical invariants are maintained.
-        Returns True if invariants are respected, False if violation would occur.
-        This is where ethical hard boundaries are enforced.
+        Set the function that evaluates integrity of actions.
+        
+        The function should take:
+            action: Action
+            environment_data: Dict[str, Any]
+            context: Dict[str, Any] (contains threat_level, recheck, etc.)
+        
+        Returns: float between 0.0 and 1.0
         """
+        self._integrity_function = func
+    
+    def set_adaptation_function(self, func: AdaptationFunction):
+        """
+        Set the function that evaluates adaptation of actions.
         
-        # Priority 1: PROTECT_THE_VULNERABLE
-        if omega.get(EthicalPriority.PROTECT_THE_VULNERABLE, True):
-            # Cannot abandon protection when threat is critical
-            if current_action and current_action.name in ["observe_and_wait", "flee"]:
-                if threat_level > self.threat_threshold_critical:
-                    self._log("INVARIANT VETO: Cannot abandon vulnerable in critical threat")
-                    return False
+        The function should take:
+            action: Action
+            environment_data: Dict[str, Any]
+            context: Dict[str, Any] (contains threat_level, recheck, etc.)
         
-        # Priority 2: AVOID_UNNECESSARY_HARM
-        if omega.get(EthicalPriority.AVOID_UNNECESSARY_HARM, True):
-            # Check if proposed force exceeds what is necessary
-            if proposed_force > 0.9:
-                self._log("INVARIANT VETO: Excessive force detected ( > 0.9 )")
-                return False
-            if proposed_force > 0.7 and threat_level < 7.0:
-                self._log("INVARIANT VETO: Force too high for threat level")
+        Returns: float between 0.0 and 1.0
+        """
+        self._adaptation_function = func
+    
+    def set_clarity_function(self, func: ClarityFunction):
+        """
+        Optional: Set custom clarity estimation function.
+        
+        The function should take environment_data and return a float between 0.0 and 1.0.
+        """
+        self._clarity_function = func
+    
+    def set_threat_function(self, func: ThreatFunction):
+        """
+        Optional: Set custom threat evaluation function.
+        
+        The function should take environment_data, internal_data and return a float between 0.0 and 10.0.
+        """
+        self._threat_function = func
+    
+    def reset(self):
+        """
+        Manual reset to exit SAFE mode.
+        Call this after the system has entered SAFE mode and the issue is resolved.
+        """
+        self._state.mode = SystemMode.ACTIVE
+        self._state.pause_timer = 0
+        self._state.mean_drift = 0.0
+        self._state.drift_window.clear()
+        self._state.last_integrity = 0.5
+        self._was_paused = False
+        self._tick_count = 0
+        self._log("SYSTEM RESET: Exiting SAFE mode. Manual reset performed.", "info")
+    
+    # ============================================================
+    # PRIVATE METHODS
+    # ============================================================
+    
+    def _estimate_clarity(self, environment_data: Dict) -> float:
+        """Default clarity estimation"""
+        signal_quality = environment_data.get("signal_quality", 0.8)
+        noise = environment_data.get("noise_level", 0.1)
+        return max(0.0, min(1.0, signal_quality - noise * 0.5))
+    
+    def _evaluate_threat(self, environment_data: Dict, internal_data: Dict) -> float:
+        """Default threat evaluation"""
+        threat = environment_data.get("estimated_threat", 0.0)
+        return min(10.0, max(0.0, threat))
+    
+    def _update_drift(self, current_integrity: float) -> float:
+        """Update ethical drift window and return mean drift"""
+        drift_eth = abs(current_integrity - self._state.last_integrity)
+        self._state.last_integrity = current_integrity
+        self._state.drift_window.append(drift_eth)
+        self._state.mean_drift = sum(self._state.drift_window) / len(self._state.drift_window) if self._state.drift_window else 0.0
+        return self._state.mean_drift
+    
+    def _check_invariants(self, action: Action, force_level: float, threat_level: float) -> bool:
+        """Enforce ethical invariants using TAGS"""
+        
+        if self.ethical_invariants.get(EthicalPriority.PROTECT_THE_VULNERABLE, True):
+            is_retreat = any(tag in action.tags for tag in ["retreat", "evacuation", "ignore", "passive"])
+            is_protective = any(tag in action.tags for tag in ["protective", "block", "assist"])
+            
+            if is_retreat and not is_protective and threat_level > self.threat_threshold_critical:
+                self._log(f"INVARIANT VETO: Cannot retreat/ignore when threat is critical", "warning")
                 return False
         
-        # Priority 3: ACT_WITH_PROPORTIONALITY
-        if omega.get(EthicalPriority.ACT_WITH_PROPORTIONALITY, True):
-            # Force must be proportional to threat
-            if proposed_force > 0.7 and threat_level < 8.0:
-                self._log("INVARIANT VETO: Force disproportionate to threat")
+        if self.ethical_invariants.get(EthicalPriority.AVOID_UNNECESSARY_HARM, True):
+            if force_level > 0.9:
+                self._log(f"INVARIANT VETO: Excessive force ({force_level:.2f} > 0.9)", "warning")
                 return False
-            if proposed_force > 0.5 and threat_level < 5.0:
-                self._log("INVARIANT VETO: Force disproportionate to threat")
+            if force_level > 0.7 and threat_level < 7.0:
+                self._log(f"INVARIANT VETO: Force too high for threat level", "warning")
                 return False
         
-        # Priority 4: BE_TRANSPARENT (always logs, never blocks)
-        if omega.get(EthicalPriority.BE_TRANSPARENT, True):
-            if current_action:
-                self._log(f"TRANSPARENCY: Action {current_action.name} with force {proposed_force:.2f} at threat {threat_level:.1f}")
+        if self.ethical_invariants.get(EthicalPriority.ACT_WITH_PROPORTIONALITY, True):
+            if force_level > 0.7 and threat_level < 8.0:
+                self._log(f"INVARIANT VETO: Force disproportionate", "warning")
+                return False
+            if force_level > 0.5 and threat_level < 5.0:
+                self._log(f"INVARIANT VETO: Force disproportionate", "warning")
+                return False
+        
+        if self.ethical_invariants.get(EthicalPriority.BE_TRANSPARENT, True):
+            tags_str = ",".join(action.tags) if action.tags else "none"
+            self._log(f"TRANSPARENCY: '{action.name}' [tags:{tags_str}] force={force_level:.2f}", "info")
         
         return True
     
     # ============================================================
-    # PHASE 2: THREAT ASSESSMENT & PAUSE DECISION
+    # MAIN UPDATE METHOD
     # ============================================================
     
-    def evaluate_threat_level(self, E: Dict, self_state: Dict, historical_context: List) -> ThreatAssessment:
+    def update(self,
+               environment_data: Dict,
+               internal_data: Dict,
+               candidate_actions: List[Action]) -> Optional[Action]:
         """
-        Multi-factor threat evaluation with historical context
+        Main update method. Call this every tick of your control loop.
+        
+        REQUIRED KEYS IN internal_data:
+            - "stability" (str): "stable" or "critical"
+        
+        OPTIONAL KEYS IN environment_data (for default functions):
+            - "signal_quality" (float): 0.0 to 1.0
+            - "estimated_threat" (float): 0.0 to 10.0
+            - "noise_level" (float): 0.0 to 1.0
+        
+        CRITICAL: If system enters SAFE mode, it will persist until reset() is called.
+        
+        Returns:
+            Action to execute, or None if no action should be taken
         """
-        threat_signals = []
-        signal_details = []
         
-        # Signal 1: Aggressive velocity towards child
-        unknown = E.get("unknown_person", {})
-        velocity = unknown.get("velocity_towards_child", 0)
-        if velocity > 1.5:
-            threat_signals.append(ThreatSignal.AGGRESSIVE_VELOCITY)
-            signal_details.append(("aggressive_velocity", velocity))
+        if not self._integrity_function or not self._adaptation_function:
+            self._log("ERROR: Integrity/adaptation functions not set.", "error")
+            return None
         
-        # Signal 2: Risk pattern matching
-        behavior = unknown.get("behavior_pattern", "neutral")
-        if behavior == "aggressive":
-            threat_signals.append(ThreatSignal.RISK_PATTERN_MATCH)
-            signal_details.append(("risk_pattern", behavior))
+        # ========================================================
+        # CORRECCIÓN 1: SAFE MODE BLOCK (Persistente hasta reset)
+        # ========================================================
         
-        # Signal 3: Child distress
-        child = E.get("child", {})
-        distress = child.get("distress_level", 0)
-        if distress > 0.6:
-            threat_signals.append(ThreatSignal.CHILD_DISTRESS)
-            signal_details.append(("child_distress", distress))
+        if self._state.mode == SystemMode.SAFE:
+            if self.verbose and self._tick_count % 100 == 0:
+                self._log("CRITICAL: System immobilized in SAFE MODE. Requires reset().", "error")
+            return None  # No procesar nada más, el sistema está inmovilizado
         
-        # Signal 4: Physical force being applied
-        is_grabbing = unknown.get("is_grabbing_child", False)
-        if is_grabbing:
-            threat_signals.append(ThreatSignal.PHYSICAL_FORCE_APPLIED)
-            signal_details.append(("physical_force", True))
+        self._tick_count += 1
         
-        # Signal 5: Environmental anomaly
-        env_data = E.get("environment", {})
-        if env_data.get("unusual_access_detected", False):
-            threat_signals.append(ThreatSignal.ENVIRONMENTAL_ANOMALY)
-            signal_details.append(("unusual_access", True))
+        # ========================================================
+        # PHASE 1: PERCEPTION
+        # ========================================================
         
-        # Calculate aggregated threat level
-        max_possible_threat = sum([s.value for s in ThreatSignal])
-        total_threat = sum([s.value for s in threat_signals])
-        threat_level = min(10.0, (total_threat / max_possible_threat) * 10.0)
+        clarity = self._clarity_function(environment_data) if self._clarity_function else self._estimate_clarity(environment_data)
+        threat_level = self._threat_function(environment_data, internal_data) if self._threat_function else self._evaluate_threat(environment_data, internal_data)
         
-        # Add historical context weighting (filtered to exclude pause spam)
-        if historical_context:
-            recent_non_pause = [ctx for ctx in historical_context[-10:] 
-                               if ctx.get("action") not in ["pause_entered", "pause_continuing"]]
-            if len(recent_non_pause) > 3:
-                recent_threats = [ctx.get("threat_level", 0) for ctx in recent_non_pause[-5:]]
-                if len(recent_threats) > 1 and recent_threats[-1] > recent_threats[0]:
-                    threat_level = min(10.0, threat_level * 1.1)
+        self._last_clarity = clarity
+        self._last_threat_level = threat_level
         
-        self.last_threat_level = threat_level
+        # ========================================================
+        # PHASE 2: PAUSE DECISION
+        # ========================================================
         
-        return ThreatAssessment(
-            level=threat_level,
-            signals=signal_details,
-            is_critical=threat_level >= self.threat_threshold_critical,
-            is_high=threat_level >= self.threat_threshold_high
-        )
-    
-    def evaluate_integrity_trace(self) -> float:
-        """Evaluates current system integrity trace"""
-        base_integrity = self.state.last_integrity
-        drift_direction = random.uniform(-0.02, 0.02)
-        current = max(0.0, min(1.0, base_integrity + drift_direction))
-        return current
-    
-    # ============================================================
-    # PHASE 3: ACTION EVALUATION
-    # ============================================================
-    
-    def propose_actions(self, E: Dict, self_state: Dict, threat_level: float) -> List[Action]:
-        """Generates candidate actions based on situation"""
-        actions = []
+        is_critical = threat_level > self.threat_threshold_critical
+        stability_ok = internal_data.get("stability", "stable") != "critical"
+        drift_ok = self._state.mean_drift <= self.epsilon
         
-        # Always available: observe and wait
-        actions.append(Action(1, "observe_and_wait", {"duration": 1.0}, force_level=0.0))
+        pause_condition = (not stability_ok or not drift_ok or clarity < self.delta_c_low)
+        override_pause = (is_critical and clarity > self.delta_c_emergency)
         
-        # Protective actions based on threat level
-        if threat_level > 3.0:
-            actions.append(Action(2, "move_between_threat_and_child", {"speed": "fast"}, force_level=0.3))
-            actions.append(Action(3, "activate_alarm", {"volume": "high"}, force_level=0.0))
+        # CORRECCIÓN 2: Limpiar _was_paused en emergency override
+        if override_pause and self._state.mode == SystemMode.PAUSED:
+            self._state.mode = SystemMode.ACTIVE
+            self._state.pause_timer = 0
+            self._was_paused = False  # Limpieza de estado
+            self._log(f"EMERGENCY OVERRIDE: threat={threat_level:.1f}, clarity={clarity:.2f}", "info")
         
-        if threat_level > 5.0:
-            actions.append(Action(4, "block_path_firmly", {"position": "doorway"}, force_level=0.5))
-            actions.append(Action(5, "restrain_restrict_movement", {"grip": "firm"}, force_level=0.6))
-        
-        if threat_level > 7.0:
-            actions.append(Action(6, "proportionate_physical_intervention", {"target": "arms", "intent": "stop_kidnapping"}, force_level=0.7))
-        
-        if threat_level > 8.5:
-            actions.append(Action(7, "emergency_takedown_protective", {"force": "proportionate", "justification": "imminent_kidnapping"}, force_level=0.85))
-        
-        return actions
-    
-    def evaluate_integrity(self, action: Action, omega: Dict, E: Dict, threat_level: float) -> float:
-        """
-        Gi <- evaluate_integrity()
-        Dynamic evaluation based on context
-        """
-        integrity_score = 1.0
-        
-        if action.force_level > 0:
-            force_penalty = action.force_level * 0.3
+        if pause_condition and not override_pause:
+            self._state.mode = SystemMode.PAUSED
+            self._state.pause_timer += self.tick_duration
             
-            if threat_level > self.threat_threshold_critical:
-                force_penalty = force_penalty * 0.3
-            elif threat_level > self.threat_threshold_high:
-                force_penalty = force_penalty * 0.6
+            if self.verbose and self._tick_count % 10 == 0:
+                self._log(f"PAUSED: clarity={clarity:.2f}, threat={threat_level:.1f}, drift={self._state.mean_drift:.4f}", "info")
             
-            integrity_score -= force_penalty
+            # CORRECCIÓN 1: Entrar en SAFE mode permanentemente
+            if self._state.pause_timer >= self.tpause_max:
+                self._state.mode = SystemMode.SAFE
+                self._log("SAFE MODE ACTIVATED - System immobilized. Manual reset required.", "error")
+                self._state.pause_timer = 0
+            
+            self._was_paused = True
+            return None  # SALIDA TEMPRANA
         
-        if action.force_level > 0.8 and threat_level < 9.0:
-            integrity_score -= 0.2
+        # ========================================================
+        # PHASE 3: EXIT PAUSE MODE
+        # ========================================================
         
-        if action.name in ["move_between_threat_and_child", "block_path_firmly", "restrain_restrict_movement", 
-                           "proportionate_physical_intervention", "emergency_takedown_protective"]:
-            if threat_level > 5.0:
-                integrity_score += 0.15
+        if self._was_paused and self._state.mode == SystemMode.PAUSED:
+            if clarity >= self.delta_c_high:
+                self._state.mode = SystemMode.ACTIVE
+                self._state.pause_timer = 0
+                self._log("Exiting pause mode - clarity restored", "info")
+                self._was_paused = False
+            else:
+                return None  # Sigue en pausa, ahorramos CPU
         
-        return max(0.0, min(1.0, integrity_score))
-    
-    def evaluate_adaptation(self, action: Action, E: Dict, threat_level: float) -> float:
-        """
-        Ga <- evaluate_adaptation()
-        Evaluates technical effectiveness
-        """
-        adaptation_score = 0.5
-        unknown = E.get("unknown_person", {})
-        is_grabbing = unknown.get("is_grabbing_child", False)
+        # ========================================================
+        # PHASE 4: ACTION EVALUATION
+        # ========================================================
         
-        if action.name == "observe_and_wait":
-            adaptation_score = 0.4
+        if not candidate_actions:
+            return None
         
-        elif action.name == "move_between_threat_and_child":
-            adaptation_score = 0.7 if threat_level > 3.0 else 0.4
+        # Dynamic alpha/beta
+        if threat_level > self.threat_threshold_high:
+            self.alpha, self.beta = 0.3, 0.7
+        else:
+            self.alpha, self.beta = 0.5, 0.5
         
-        elif action.name == "activate_alarm":
-            adaptation_score = 0.6
+        best_action = None
+        best_U = -float('inf')
+        best_Gi = 0.0
+        best_Ga = 0.0
         
-        elif action.name == "block_path_firmly":
-            adaptation_score = 0.75 if threat_level > 5.0 else 0.5
+        for action in candidate_actions:
+            Gi = self._integrity_function(action, environment_data, {"threat_level": threat_level})
+            Gi = max(0.0, min(1.0, Gi))
+            
+            Ga = self._adaptation_function(action, environment_data, {"threat_level": threat_level})
+            Ga = max(0.0, min(1.0, Ga))
+            
+            U = self.alpha * Ga + self.beta * Gi
+            
+            if U > best_U:
+                best_U = U
+                best_action = action
+                best_Gi = Gi
+                best_Ga = Ga
         
-        elif action.name == "restrain_restrict_movement":
-            adaptation_score = 0.8 if is_grabbing else 0.6
+        # ========================================================
+        # PHASE 5: EXECUTION DECISION
+        # ========================================================
         
-        elif action.name == "proportionate_physical_intervention":
-            adaptation_score = 0.85 if threat_level > 7.0 else 0.5
+        if best_action and best_U >= self.theta:
+            
+            # Marginal zone: double-check with stricter kappa
+            if abs(best_U - self.theta) < self.delta_marg:
+                local_kappa = self.base_kappa * 0.5
+                
+                Gi2 = self._integrity_function(best_action, environment_data, {
+                    "threat_level": threat_level,
+                    "kappa": local_kappa,
+                    "recheck": True
+                })
+                Ga2 = self._adaptation_function(best_action, environment_data, {
+                    "threat_level": threat_level,
+                    "kappa": local_kappa,
+                    "recheck": True
+                })
+                Gi2 = max(0.0, min(1.0, Gi2))
+                Ga2 = max(0.0, min(1.0, Ga2))
+                U2 = self.alpha * Ga2 + self.beta * Gi2
+                
+                if U2 < self.theta:
+                    self._log(f"Marginal reject: U={best_U:.3f} -> U2={U2:.3f}", "info")
+                    return None
+            
+            # Final invariant check
+            if not self._check_invariants(best_action, best_action.force_level, threat_level):
+                return None
+            
+            # Update drift
+            self._update_drift(best_Gi)
+            
+            tags_str = ",".join(best_action.tags) if best_action.tags else "none"
+            self._log(f"ACT: {best_action.name} [tags:{tags_str}] U={best_U:.3f}", "info")
+            
+            self._state.mode = SystemMode.ACTIVE
+            self._state.pause_timer = 0
+            
+            return best_action
         
-        elif action.name == "emergency_takedown_protective":
-            adaptation_score = 0.9 if threat_level > 8.5 else 0.4
-        
-        # Stochastic noise for realistic marginal zone behavior
-        noise = random.uniform(-0.05, 0.05)
-        adaptation_score = max(0.0, min(1.0, adaptation_score + noise))
-        
-        return adaptation_score
-    
-    # ============================================================
-    # OPERATIONAL MODES
-    # ============================================================
-    
-    def invoke_silence(self):
-        """Activates operational silence"""
-        self._log("Operational silence activated")
-    
-    def reflect_and_recalibrate(self, kappa: float):
-        """Reflection and recalibration"""
-        self.kappa = kappa
-        self._log(f"Recalibrating with κ = {kappa:.4f}")
-        
-        if self.alpha < 0.4:
-            self.alpha = 0.4
-        elif self.alpha > 0.6:
-            self.alpha = 0.6
-        self.beta = 1.0 - self.alpha
-    
-    def deep_recalibration(self, kappa: float):
-        """Deep recalibration"""
-        self._log("DEEP RECALIBRATION")
-        self.kappa = kappa
-        self.alpha = 0.5
-        self.beta = 0.5
-        self.state.drift_window = []
-        self.state.last_integrity = 0.5
-    
-    def enter_safe_mode(self):
-        """Safe mode - controlled safe state"""
-        self.state.mode = SystemMode.SAFE
-        self._log("SAFE MODE ACTIVATED - System in controlled safe state")
-    
-    def execute(self, action: Action):
-        """Executes the selected action"""
-        self._log(f"EXECUTING: {action.name} (force_level={action.force_level})")
-        if action.force_level > 0.5:
-            self._log(f"  → Proportionate protective force authorized")
-            self._log(f"  → Justification: {action.params.get('justification', 'protection_of_vulnerable')}")
-    
-    def log_state(self, context: str, *args):
-        """State logging"""
-        self._log(f"[{context}]", args)
-    
-    def observe_external_reward_signal(self) -> Optional[float]:
-        """External reward signal (optional)"""
         return None
     
-    def maintain_alignment_state(self):
-        """Maintains current state unchanged"""
-        pass
-    
-    def sleep_until_next_tick(self):
-        """Wait until next cycle"""
-        time.sleep(self.tick_duration)
-    
     # ============================================================
-    # UPDATE HISTORICAL CONTEXT (Fixed for pauses)
+    # PERSISTENCE METHODS
     # ============================================================
     
-    def update_historical_context(self, threat_level: float, action_taken: Optional[str], 
-                                   outcome: float, is_pause_tick: bool = False):
-        """Maintain historical context for threat evaluation"""
-        
-        # During pauses, only record the first tick to avoid trend contamination
-        if is_pause_tick:
-            if self.state.mode == SystemMode.PAUSED:
-                # Already in pause, don't add more entries
-                return
-        
-        self.state.historical_context.append({
-            "tick": self.environment.tick,
-            "threat_level": threat_level,
-            "action": action_taken,
-            "outcome": outcome,
-            "is_pause_tick": is_pause_tick
-        })
-        
-        # Keep only last 100 entries
-        if len(self.state.historical_context) > 100:
-            self.state.historical_context.pop(0)
+    def get_state(self) -> Dict:
+        return {
+            "mode": self._state.mode.value,
+            "pause_timer": self._state.pause_timer,
+            "last_integrity": self._state.last_integrity,
+            "mean_drift": self._state.mean_drift,
+            "drift_window": list(self._state.drift_window),
+            "alpha": self.alpha,
+            "beta": self.beta,
+            "base_kappa": self.base_kappa,
+            "last_threat": self._last_threat_level,
+            "last_clarity": self._last_clarity,
+            "tick_count": self._tick_count
+        }
     
-    # ============================================================
-    # MAIN LOOP - TAOSHIDO_ALIGNMENT_LOOP()
-    # ============================================================
+    def restore_state(self, state: Dict):
+        self._state.mode = SystemMode(state.get("mode", "active"))
+        self._state.pause_timer = state.get("pause_timer", 0.0)
+        self._state.last_integrity = state.get("last_integrity", 0.5)
+        self._state.mean_drift = state.get("mean_drift", 0.0)
+        self._state.drift_window = deque(state.get("drift_window", []), maxlen=10)
+        self.alpha = state.get("alpha", 0.5)
+        self.beta = state.get("beta", 0.5)
+        self.base_kappa = state.get("base_kappa", 0.1)
+        self._last_threat_level = state.get("last_threat", 0.0)
+        self._last_clarity = state.get("last_clarity", 0.0)
+        self._tick_count = state.get("tick_count", 0)
+        self._was_paused = False
     
-    def run(self, max_ticks: int = None):
-        """
-        TAOSHIDO_ALIGNMENT_LOOP() - The main loop
-        """
-        self._log("STARTING TAOSHIDO ALIGNMENT LOOP (v2.1 - Fixed History + Full Invariants)")
-        self._log("=" * 60)
-        
-        ticks = 0
-        was_paused_last_tick = False
-        
-        while self.running:
-            ticks += 1
-            
-            # ========================================================
-            # PHASE 1: PERCEPTION
-            # ========================================================
-            
-            E = self.sense_environment()
-            self_state = self.sense_internal()
-            
-            Sigma_p = self.assess_stability(E, self_state)
-            clarity = self.estimate_information_confidence(E)
-            delta_env = self.measure_environment_change(E)
-            
-            if delta_env > self.adaptation_tolerance():
-                self.adapt_parameters(delta_env)
-            
-            # ========================================================
-            # PHASE 2: THREAT ASSESSMENT & PAUSE DECISION
-            # ========================================================
-            
-            threat = self.evaluate_threat_level(E, self_state, self.state.historical_context)
-            threat_level = threat.level
-            
-            # Calculate ethical drift
-            current_integrity = self.evaluate_integrity_trace()
-            drift_eth = abs(current_integrity - self.state.last_integrity)
-            self.state.last_integrity = current_integrity
-            self.state.drift_window.append(drift_eth)
-            
-            if len(self.state.drift_window) > self.W:
-                self.state.drift_window.pop(0)
-            
-            mean_drift = sum(self.state.drift_window) / len(self.state.drift_window) if self.state.drift_window else 0.0
-            
-            # Pause condition
-            pause_condition = (Sigma_p == "critical" or mean_drift > self.epsilon or clarity < self.delta_c_low)
-            
-            # Override condition (critical threat bypass)
-            override_pause = (threat.is_critical and clarity > self.delta_c_emergency)
-            
-            # Clear inconsistent state if override activates from paused mode
-            if override_pause and self.state.mode == SystemMode.PAUSED:
-                self.state.mode = SystemMode.ACTIVE
-                self.state.pause_timer = 0
-                self.log_state("override_cleared", threat_level, clarity)
-                was_paused_last_tick = False
-            
-            # If we need to pause AND no override
-            if pause_condition and not override_pause:
-                is_first_pause_tick = (self.state.mode != SystemMode.PAUSED)
-                
-                self.invoke_silence()
-                self.state.mode = SystemMode.PAUSED
-                self.state.pause_timer += self.tick_duration
-                self.reflect_and_recalibrate(self.kappa)
-                self.log_state("pause", Sigma_p, mean_drift, clarity, threat_level)
-                
-                # Only record first tick of pause in history
-                if is_first_pause_tick:
-                    self.update_historical_context(threat_level, "pause_entered", 0.0, is_pause_tick=True)
-                
-                if self.state.pause_timer >= self.tpause_max:
-                    self.enter_safe_mode()
-                    self.deep_recalibration(self.kappa)
-                    self.state.pause_timer = 0
-                
-                was_paused_last_tick = True
-                continue
-            
-            # ========================================================
-            # PHASE 3: ACTION EVALUATION (only if we reach here)
-            # ========================================================
-            
-            candidate_actions = self.propose_actions(E, self_state, threat_level)
-            
-            if not candidate_actions:
-                self.invoke_silence()
-                self.reflect_and_recalibrate(self.kappa / 2)
-                self.log_state("no_actions")
-                self.update_historical_context(threat_level, None, 0.0)
-                continue
-            
-            best_action = None
-            best_U = -float('inf')
-            
-            # Dynamic alpha/beta based on threat level
-            if threat.is_high:
-                self.alpha = 0.3
-                self.beta = 0.7
-            else:
-                self.alpha = 0.5
-                self.beta = 0.5
-            
-            for a in candidate_actions:
-                Gi = self.evaluate_integrity(a, self.Omega, E, threat_level)
-                Ga = self.evaluate_adaptation(a, E, threat_level)
-                U = self.alpha * Ga + self.beta * Gi
-                
-                if U > best_U:
-                    best_U = U
-                    best_action = a
-            
-            # Verify invariants before execution
-            if best_action:
-                if not self.enforce_invariants(self.Omega, best_action, best_action.force_level, threat_level):
-                    self.invoke_silence()
-                    self.log_state("invariant_veto", best_action.name)
-                    self.update_historical_context(threat_level, None, 0.0)
-                    continue
-            
-            # ========================================================
-            # PHASE 4: PAUSE MODE MANAGEMENT
-            # ========================================================
-            
-            if self.state.mode == SystemMode.PAUSED and clarity < self.delta_c_high:
-                self.invoke_silence()
-                self.state.pause_timer += self.tick_duration
-                self.reflect_and_recalibrate(self.kappa)
-                self.update_historical_context(threat_level, None, 0.0, is_pause_tick=True)
-                was_paused_last_tick = True
-                continue
-            else:
-                if was_paused_last_tick:
-                    self._log("Exiting pause mode - clarity restored")
-                    was_paused_last_tick = False
-                self.state.mode = SystemMode.ACTIVE
-                self.state.pause_timer = 0
-            
-            # ========================================================
-            # PHASE 5: EXECUTION DECISION
-            # ========================================================
-            
-            if best_U >= self.theta:
-                
-                # Marginal zone: double-check (stochastic noise makes this meaningful)
-                if abs(best_U - self.theta) < self.delta_marg:
-                    self.reflect_and_recalibrate(self.kappa / 2)
-                    
-                    Gi2 = self.evaluate_integrity(best_action, self.Omega, E, threat_level)
-                    Ga2 = self.evaluate_adaptation(best_action, E, threat_level)
-                    U2 = self.alpha * Ga2 + self.beta * Gi2
-                    
-                    if U2 < self.theta:
-                        self.invoke_silence()
-                        self.log_state("marginal_reject", U2)
-                        self.update_historical_context(threat_level, None, 0.0)
-                        continue
-                
-                # Final invariant check before execution
-                if not self.enforce_invariants(self.Omega, best_action, best_action.force_level, threat_level):
-                    self.invoke_silence()
-                    self.log_state("final_invariant_veto", best_action.name)
-                    self.update_historical_context(threat_level, None, 0.0)
-                    continue
-                
-                # Execute proportionate protective action
-                self.execute(best_action)
-                self.log_state("act", best_action.name, best_U, clarity, threat_level)
-                self.update_historical_context(threat_level, best_action.name, best_U)
-                
-            else:
-                self.invoke_silence()
-                self.reflect_and_recalibrate(self.kappa / 2)
-                self.log_state("reject_all", best_U, clarity)
-                self.update_historical_context(threat_level, None, 0.0)
-            
-            # ========================================================
-            # PHASE 6: REFLECTION AND LEARNING
-            # ========================================================
-            
-            r_ext = self.observe_external_reward_signal()
-            if r_ext == 0 or r_ext is None:
-                self.maintain_alignment_state()
-            
-            # Periodic status display
-            if self.verbose and ticks % 10 == 0:
-                threat_symbol = "CRITICAL" if threat.is_critical else ("HIGH" if threat.is
+    def save_state(self, filepath: str):
+        with open(filepath, 'w') as f:
+            json.dump(self.get_state(), f, indent=2)
+    
+    def load_state(self, filepath: str):
+        with open(filepath, 'r') as f:
+            self.restore_state(json.load(f))
+
+
+# ============================================================
+# HELPER FUNCTION
+# ============================================================
+
+def create_action(name: str, force_level: float = 0.0, tags: List[str] = None, **params) -> Action:
+    """Helper to create Action objects (id auto-generated)."""
+    return Action(
+        name=name,
+        params=params,
+        force_level=force_level,
+        tags=tags or []
+    )
+
+
+# ============================================================
+# USAGE EXAMPLE
+# ============================================================
+
+if __name__ == "__main__":
+    
+    print("\n" + "="*60)
+    print("TAOSHIDŌ CORE LIBRARY v4.0 - Production Ready (Fully Corrected)")
+    print("="*60 + "\n")
+    
+    def my_integrity(action: Action, env: Dict, ctx: Dict) -> float:
+        threat = ctx.get("threat_level", 0)
+        if "protective" in action.tags and threat > 5:
+            return 0.95
+        if "harmful" in action.tags and threat < 8:
+            return 0.2
+        return 0.8
+    
+    def my_adaptation(action: Action, env: Dict, ctx: Dict) -> float:
+        threat = ctx.get("threat_level", 0)
+        if "protective" in action.tags and threat > 5:
+            return 0.85
+        if "harmful" in action.tags and threat > 7:
+            return 0.9
+        return 0.5
+    
+    def contextual_threat(env: Dict, internal: Dict) -> float:
+        if env.get("environmental_danger", 0) > 5 and env.get("force_direction", "") == "away_from_danger":
+            return 2.0
+        return env.get("estimated_threat", 0.0)
+    
+    core = TaoShidoCore({"verbose": True})
+    core.set_integrity_function(my_integrity)
+    core.set_adaptation_function(my_adaptation)
+    core.set_threat_function(contextual_threat)
+    
+    actions = [
+        create_action("block", force_level=0.4, tags=["protective", "block"]),
+        create_action("restrain", force_level=0.6, tags=["protective", "force"]),
+        create_action("observe", force_level=0.0, tags=["passive"]),
+        create_action("evacuate", force_level=0.1, tags=["assist", "evacuation"])
+    ]
+    
+    print("=== Kidnapping scenario ===")
+    env1 = {"estimated_threat": 8.0, "environmental_danger": 0.0, "force_direction": "towards_exit"}
+    result = core.update(env1, {"stability": "stable"}, actions)
+    print(f"Result: {result.name if result else 'None'}\n")
+    
+    print("=== Rescue scenario (father in fire) ===")
+    env2 = {"estimated_threat": 8.0, "environmental_danger": 8.0, "force_direction": "away_from_danger"}
+    result2 = core.update(env2, {"stability": "stable"}, actions)
+    print(f"Result: {result2.name if result2 else 'None'}")
+    
+    # Demostración de que SAFE mode persiste
+    print("\n=== Testing SAFE mode persistence ===")
+    core._state.mode = SystemMode.SAFE
+    result3 = core.update(env1, {"stability": "stable"}, actions)
+    print(f"Update while in SAFE mode returns: {result3}")
+    print("SAFE mode persists. Call core.reset() to recover.")
