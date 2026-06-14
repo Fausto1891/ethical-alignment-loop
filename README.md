@@ -164,6 +164,13 @@ A way where intelligence learns to breathe before it acts.
 
 ## License
 
-This project is intended to be shared for reading, study, non-commercial use, adaptation, and implementation with attribution to the author.
+This repository uses two different license layers:
 
-A formal license file will be added to clarify the conditions of use.
+- Software code, when added, is covered by the GNU GPL-2.0 license included in the LICENSE file.
+- The book, written content, pseudocode, conceptual framework, documentation, and philosophical material are covered by the content license described in LICENSE_CONTENT.md.
+
+The TaoShidō Ethical Alignment Loop, as a written and conceptual work, is shared for reading, study, non-commercial use, adaptation, translation, and discussion with attribution to Fausto Meninno.
+
+For content and book material, see:
+
+LICENSE_CONTENT.md
