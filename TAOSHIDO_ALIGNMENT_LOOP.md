@@ -1,11 +1,3 @@
-# TAOSHIDŌ_ALIGNMENT_LOOP()
-
-This document presents the operational pseudocode of the TaoShidō Ethical Alignment Loop.
-
-The loop is the core mechanism of the Natural Alignment Framework.
-
-It describes how an intelligent system should perceive, evaluate, pause, recalibrate, and act while preserving ethical coherence.
-
 TAOSHIDŌ_ALIGNMENT_LOOP()
 
 while system_is_on():
@@ -15,9 +7,9 @@ while system_is_on():
     # ============================================================
     
     if system_mode == SAFE:
-        # System is immobilized. No processing occurs.
-        # Can only exit by calling reset()
-        wait_for_manual_reset()
+        # System is immobilized for autonomous action.
+        # Only minimal monitoring, logging, and emergency notification remain active.
+        monitor_and_log_only()
         continue
     
     # ============================================================
@@ -60,7 +52,7 @@ while system_is_on():
     # Emergency override (critical threat + minimum clarity)
     override_pause ← (threat_level > threat_threshold_critical and clarity > δc_emergency)
     
-    # FIX: Clean state when exiting via override
+    # Clean state when exiting via override
     if override_pause and system_mode == PAUSED:
         system_mode ← ACTIVE
         pause_timer ← 0
@@ -75,12 +67,12 @@ while system_is_on():
         reflect_and_recalibrate(κ)
         log_state("pause", Σp, mean_drift, clarity, threat_level)
         
-        # FIX: SAFE mode is persistent, not automatically reversible
+        # SAFE mode is persistent, not automatically reversible
         if pause_timer ≥ τpause_max:
             system_mode ← SAFE
             log_state("safe_mode_activated_permanent", "error")
             pause_timer ← 0
-            # System is now immobilized until manual reset
+            # System is now in safe mode until manual reset
         
         was_paused ← True
         continue
@@ -120,9 +112,10 @@ while system_is_on():
     best_Ga ← 0
     
     # Dynamic α/β based on threat level
+    # U = α·Ga + β·Gi  (Ga = adaptation, Gi = integrity)
     if threat_level > threat_threshold_high:
-        α ← 0.3   # Prioritize integrity
-        β ← 0.7
+        α ← 0.3   # Lower adaptation weight
+        β ← 0.7   # Higher integrity weight (protect the vulnerable)
     else:
         α ← 0.5
         β ← 0.5
