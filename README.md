@@ -27,26 +27,27 @@ The goal is coherent action.
 
 * Full book: [TAOSHIDŌ The Loop of Ethical Alignment.pdf](./TAOSHIDŌ%20The%20Loop%20of%20Ethical%20Alignment.pdf)
 * Operational pseudocode: [TAOSHIDO_ALIGNMENT_LOOP.md](./TAOSHIDO_ALIGNMENT_LOOP.md)
+* Python reference implementation: [src/taoshido_loop.py](./src/taoshido_loop.py)
 * Content license: [LICENSE_CONTENT.md](./LICENSE_CONTENT.md)
 
 ## Implementation
 
-A Python implementation of the TaoShidō Ethical Alignment Loop will be added in:
+A Python reference implementation of the TaoShidō Ethical Alignment Loop has been added in:
 
 `src/taoshido_loop.py`
 
-The implementation will follow the original pseudocode and will be reviewed to preserve the logic of the system:
+The implementation follows the original pseudocode and is designed to preserve the logic of the system:
 
-perception
-clarity estimation
-ethical invariants
-adaptation
-integrity
-drift detection
-pause
-recalibration
-safe mode
-controlled action
+* perception
+* clarity estimation
+* ethical invariants
+* adaptation
+* integrity
+* drift detection
+* pause
+* recalibration
+* safe mode
+* controlled action
 
 The goal of the code is not to simplify the philosophy, but to translate the loop into an executable structure.
 
@@ -138,14 +139,21 @@ They are ethical operations.
 
 ## Repository structure
 
-This repository contains or is intended to contain:
+This repository contains:
 
 * the full book in PDF format
 * the original pseudocode of the TaoShidō Alignment Loop
 * an explanatory version of the model
-* a future Python implementation
-* examples of possible use cases
+* an initial Python reference implementation
 * documentation for researchers, developers, philosophers, and AI safety communities
+
+Future additions may include:
+
+* practical examples
+* simulation scenarios
+* tests
+* extended implementation notes
+* possible applications for autonomous agents, human-machine systems, and AI safety research
 
 ## Intended audience
 
@@ -176,6 +184,8 @@ The book and the conceptual framework are complete.
 
 The operational pseudocode has been published.
 
+The initial Python reference implementation has been added.
+
 The implementation layer is open for development, review, refinement, and future experimentation.
 
 ## Mission
@@ -196,7 +206,7 @@ A way where intelligence learns to breathe before it acts.
 
 This repository uses two different license layers:
 
-* Software code, when added, is covered by the GNU GPL-2.0 license included in the LICENSE file.
+* Software code is covered by the GNU GPL-2.0 license included in the LICENSE file.
 * The book, written content, pseudocode, conceptual framework, documentation, and philosophical material are covered by the content license described in LICENSE_CONTENT.md.
 
 The TaoShidō Ethical Alignment Loop, as a written and conceptual work, is shared for reading, study, non-commercial use, adaptation, translation, and discussion with attribution to Fausto Meninno.
