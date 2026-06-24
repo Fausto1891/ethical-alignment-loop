@@ -1,7 +1,7 @@
 """
 TAOSHIDŌ CORE LIBRARY
 Ethical Alignment Loop for autonomous systems
-Version: 4.0 - Production Ready (Fully Corrected)
+Version: 4.0 
 
 Critical fixes:
     - SAFE mode persists until manual reset
